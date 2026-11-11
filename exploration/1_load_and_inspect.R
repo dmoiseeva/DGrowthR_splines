@@ -1,85 +1,77 @@
-install.packages("DGrowthR")
+# Install devtools
+install.packages("devtools")
 
-library("tidyverse")
+# Load the library
 library(devtools)
-# We also need the permApprox package for the permutation test in the growth comparison section
-# Here we install if it wasn't already installed
-if(!requireNamespace("permApprox", quietly = TRUE)) {
-  remotes::install_github("stefpeschel/permApprox")
+install()
+remotes::install_github("stefpeschel/permApprox")
+
+# small experimental dataset
+set.seed(42)
+
+# 16 time measurements
+time <- seq(0, 15, by = 1)
+
+# Three illustrative microbial growth curves
+# with different growth characteristics
+growth <- function(t, amplitude, rate, midpoint) {
+  0.05 + amplitude / (1 + exp(-rate * (t - midpoint)))
 }
-# Read example data from Brenzinger 2024
-example_brenzinger <- read.delim("../Source_Data/Brenzinger_2024/od_data/wt_1_OD.txt",
-                                 sep = '\t')
 
-tibble(example_brenzinger) %>%
-  rmarkdown::paged_table()
-# Create common time vector
-common_time_vector <- c(0, 2, seq(from=2.739, by=0.739, length.out=18))
+od_data <- data.frame(
+  Time = time,
+  curve_1 = growth(time, 1.2, 0.8, 6) +
+    rnorm(length(time), 0, 0.015),
+  curve_2 = growth(time, 1.0, 0.6, 7) +
+    rnorm(length(time), 0, 0.015),
+  curve_3 = growth(time, 0.45, 0.4, 9) +
+    rnorm(length(time), 0, 0.015)
+)
 
-# Read all OD data
-brenzinger_data <- read_multiple_plates(path_target = "../Source_Data/Brenzinger_2024/od_data/",
-                                        time_vector = common_time_vector)
-#> The following OD data was found: dCBASS_1_OD.txt, dCBASS_2_OD.txt, dCBASS_3_OD.txt, wt_1_OD.txt, wt_2_OD.txt, wt_3_OD.txt
-# Show the first five columns of the complete OD data
-brenzinger_od <- brenzinger_data[["od_data"]]
+# Experimental conditions associated with each curve
+metadata <- data.frame(
+  curve_id = c("curve_1", "curve_2", "curve_3"),
+  treatment = c("control", "control", "drug_A")
+)
 
+head(od_data)
+metadata
 
-brenzinger_od %>%
-  rmarkdown::paged_table()
+# Raw measurements
+matplot(
+  od_data$Time,
+  od_data[, -1],
+  type = "b",
+  pch = 16,
+  xlab = "Time (h)",
+  ylab = "Optical Density",
+  main = "Synthetic microbial growth curves"
+)
 
+# first DGrowthR object
+library(DGrowthR)
 
-brenzinger_metadata <- brenzinger_data[["metadata"]]
+dgobj <- DGrowthRFromData(
+  od_data = od_data,
+  metadata = metadata
+)
 
+# Inspect the object
+dgobj
+class(dgobj)
 
-brenzinger_metadata %>%
-  rmarkdown::paged_table()
+# Which slots does the object contain?
+slotNames(dgobj)
 
+# Inspect the dimensions of stored data
+dim(dgobj@raw_od)
+dim(dgobj@metadata)
 
-# Information about each plate
-database.df <- read_tsv("../Source_Data/Brenzinger_2024/Database.txt",
-                        show_col_types = FALSE) %>%
-  separate(Strain, into = c("genotype", NA)) %>%
-  select(file_id, genotype, Rep_Nr) %>%
-  mutate(plate_name = tools::file_path_sans_ext(file_id))
-
-# Information about each well
-mapper.df <- read_tsv("../Source_Data/Brenzinger_2024/Map.txt",
-                      show_col_types = FALSE) %>%
-  rename("well" = "Well")
-
-
-# Add this information to the metadata data frame
-brenzinger_metadata <- brenzinger_metadata %>%
-  left_join(database.df, by="plate_name") %>%
-  left_join(mapper.df, by="well") %>%
-  unite("genotype_well", c(genotype, well), sep="_", remove=FALSE)
-
-brenzinger_metadata %>%
-  rmarkdown::paged_table()
-
-
-# Instantiate a DGrowthR object
-dgobj <- DGrowthRFromData(od_data = brenzinger_od,
-                          metadata = brenzinger_metadata)
-
+# Plot the growth curves through DGrowthR
 plot_growth_curves(dgobj)
 
+# What is stored in raw_od versus od_data?
+# How does the curve_id connect metadata with measurements?
+# Which slots are initially empty, and which become populated after fitting?
 
-plot_growth_curves(dgobj, facet="plate_name", color="genotype")
-
-
-dgobj <- preprocess_data(dgobj)
-
-
-plot_growth_curves(dgobj, facet="plate_name", color="genotype")
-
-
-dgobj <- estimate_fpca(dgobj)
-dgobj <- estimate_umap(dgobj)
-
-
-plot_fpca(dgobj)
-
-
-
-plot_umap(dgobj)
+slotNames(dgobj)
