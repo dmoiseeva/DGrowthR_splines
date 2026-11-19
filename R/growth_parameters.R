@@ -31,7 +31,8 @@ setGeneric("estimate_growth_parameters", function(object,
                                                   n_cores=1,
                                                   detect_polyauxic = FALSE,
                                                   polyauxic_ratio_threshold = 0.2,
-                                                  polyauxic_parameter_criteria = "carrying_capacity"){
+                                                  polyauxic_parameter_criteria = "carrying_capacity",
+                                                  method = "GP"){
   standardGeneric("estimate_growth_parameters")
 })
 
@@ -46,8 +47,10 @@ setMethod(
                         od_auc_at_t = NULL,
                         sample_n_curves=100, save_gp_data = FALSE, n_cores=1,
                         detect_polyauxic = FALSE, polyauxic_ratio_threshold = 0.2,
-                        polyauxic_parameter_criteria = "carrying_capacity"){
-
+                        polyauxic_parameter_criteria = "carrying_capacity",
+                        method = "GP"){
+    # Validate the selected regression method
+    method <- match.arg(method, c("GP", "Spline"))
 
     # Some checks first
     if(!object@preprocessed){
@@ -61,17 +64,19 @@ setMethod(
     # Determine if we need to run (or re-run) the GP fit due to not fit data found or re-sampling requested.
     if(length(object@gpfit_info) == 0 || sample_posterior_gpfit){
       message("[DGrowthR::estimate_growth_parameters] >> Fitting GP models and estimating growth parameters...")
-      object <- .fit_and_estimate(object,  model_covariate, predict_n_steps, downsample_every_n_timepoints, sample_posterior_gpfit, od_auc_at_t, sample_n_curves, save_gp_data, n_cores, detect_polyauxic, polyauxic_ratio_threshold, polyauxic_parameter_criteria)
+      object <- .fit_and_estimate(object,  model_covariate, predict_n_steps, downsample_every_n_timepoints, sample_posterior_gpfit, od_auc_at_t, sample_n_curves, save_gp_data, n_cores, detect_polyauxic, polyauxic_ratio_threshold, polyauxic_parameter_criteria, method = method)
 
     # Check if paramters for GP fit have changed
-      }else if(object@gpfit_info$gpfit_parameters$model_covariate != model_covariate || object@gpfit_info$gpfit_parameters$predict_n_steps != predict_n_steps || object@gpfit_info$gpfit_parameters$downsample_every_n_timepoints != downsample_every_n_timepoints || object@gpfit_info$gpfit_parameters$detect_polyauxic != detect_polyauxic || object@gpfit_info$gpfit_parameters$polyauxic_ratio_threshold != polyauxic_ratio_threshold || object@gpfit_info$gpfit_parameters$polyauxic_parameter_criteria != polyauxic_parameter_criteria){
+      # + check whether the regression method has changed
+      }else if(object@gpfit_info$gpfit_parameters$model_covariate != model_covariate || object@gpfit_info$gpfit_parameters$predict_n_steps != predict_n_steps || object@gpfit_info$gpfit_parameters$downsample_every_n_timepoints != downsample_every_n_timepoints || object@gpfit_info$gpfit_parameters$detect_polyauxic != detect_polyauxic || object@gpfit_info$gpfit_parameters$polyauxic_ratio_threshold != polyauxic_ratio_threshold || object@gpfit_info$gpfit_parameters$polyauxic_parameter_criteria != polyauxic_parameter_criteria || !identical(object@gpfit_info$gpfit_parameters$method, method)){
 
-      message("[DGrowthR::estimate_growth_parameters] >> Fitting new GP models due to change in hyperparameters...")
-      object <- .fit_and_estimate(object,  model_covariate, predict_n_steps, downsample_every_n_timepoints, sample_posterior_gpfit, od_auc_at_t, sample_n_curves, save_gp_data, n_cores, detect_polyauxic, polyauxic_ratio_threshold, polyauxic_parameter_criteria)
+        message("[DGrowthR::estimate_growth_parameters] >> Fitting ", method, " models and estimating growth parameters...")
+
+      object <- .fit_and_estimate(object,  model_covariate, predict_n_steps, downsample_every_n_timepoints, sample_posterior_gpfit, od_auc_at_t, sample_n_curves, save_gp_data, n_cores, detect_polyauxic, polyauxic_ratio_threshold, polyauxic_parameter_criteria, method = method)
 
     # If there is GP data, no changes to the modelling are requested, and no sampling posterior requested, then use available gpfits
     }else{
-      message("[DGrowthR::estimate_growth_parameters] >> Using stored GP data...")
+      message("[DGrowthR::estimate_growth_parameters] >> Using stored ", method, " data...")
 
       growth_parameters <- object@gpfit_info$gpfit_data %>%
         group_by(gpfit_id) %>%
@@ -120,7 +125,8 @@ setMethod(
                               downsample_every_n_timepoints,
                               sample_posterior_gpfit, od_auc_at_t,
                               sample_n_curves, save_gp_data, n_cores,
-                              detect_polyauxic, polyauxic_ratio_threshold, polyauxic_parameter_criteria){
+                              detect_polyauxic, polyauxic_ratio_threshold, polyauxic_parameter_criteria,
+                              method = "gp"){
 
   # Gather od and metadata
   #complete_od <- object@od_data
@@ -188,22 +194,39 @@ setMethod(
       return(out_list)
     }
 
-    # Fit the GP
+    # Fit the selected regression model
     gpfit <- tryCatch(
       {
+        if (method == "GP") {
 
-        fit_predict_gp(od_for_gp,
-                       t_steps=predict_n_steps,
-                       complete_sigma=sample_posterior_gpfit,
-                       prepare_dataframe=TRUE,
-                       estimate_derivatives=TRUE,
-                       delete=TRUE,
-                       pred_for_t=od_auc_at_t)
+          # Existing Gaussian Process regression
+          fit_predict_gp(
+            od_for_gp,
+            t_steps = predict_n_steps,
+            complete_sigma = sample_posterior_gpfit,
+            prepare_dataframe = TRUE,
+            estimate_derivatives = TRUE,
+            delete = TRUE,
+            pred_for_t = od_auc_at_t
+          )
 
-        },
-      error = function(cond){
-        print(i)
-      })
+        } else if (method == "Spline") {
+
+          # New penalized spline regression
+          fit_predict_spline(
+            # od_for_gp is the existing variable containing the observations selected for model fitting
+            # Despite its name, the data are not specific to Gaussian Processes
+            od_for_gp,
+            t_steps = predict_n_steps
+          )
+
+        }
+      },
+      error = function(cond) {
+        stop("Model fitting failed for group ", i,
+             ": ", conditionMessage(cond))
+      }
+    )
 
     # Determine if growth parameters should be determined by resampling posterior or by mean curve
     if(sample_posterior_gpfit){
@@ -281,7 +304,8 @@ setMethod(
 
     gpfit_list <- list("gpfit_parameters" = list("model_covariate"=model_covariate,
                                                 "predict_n_steps"=predict_n_steps,
-                                                "downsample_every_n_timepoints"=downsample_every_n_timepoints))
+                                                "downsample_every_n_timepoints"=downsample_every_n_timepoints,
+                                                "method"= method))
 
     # Update object with growth parameters
     if(length(model_groups) == 1){
